@@ -68,12 +68,12 @@ export default function ProjectMapPage() {
         drawRef.current.deleteAll();
         drawRef.current.changeMode('simple_select');
       } catch (e) {
-        console.warn('Mapbox draw mode change warning:', e);
+        console.warn('Mapbox draw mode reset warning:', e);
       }
     }
   }, []);
 
-  // Listen for Escape key to exit drawing mode
+  // Keyboard Escape listener
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' && isDrawing) {
@@ -84,7 +84,70 @@ export default function ProjectMapPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isDrawing, handleExitDraw]);
 
-  // Mapbox Initialization & Layer Updates
+  // Helper function to render site polygons onto Mapbox instance
+  const renderPolygonsOnMap = useCallback((map, siteList) => {
+    if (!map || !siteList || siteList.length === 0) return;
+
+    const bounds = new mapboxgl.LngLatBounds();
+    let hasValidCoords = false;
+
+    siteList.forEach((site) => {
+      const geojson = site.polygon_geojson;
+      if (!geojson || !geojson.coordinates) return;
+
+      const sourceId = `site-src-${site.id}`;
+      const fillLayerId = `site-fill-${site.id}`;
+      const lineLayerId = `site-line-${site.id}`;
+
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            geometry: geojson,
+            properties: { name: site.name, id: site.id },
+          },
+        });
+
+        map.addLayer({
+          id: fillLayerId,
+          type: 'fill',
+          source: sourceId,
+          paint: { 'fill-color': '#10B981', 'fill-opacity': 0.35 },
+        });
+
+        map.addLayer({
+          id: lineLayerId,
+          type: 'line',
+          source: sourceId,
+          paint: { 'line-color': '#34D399', 'line-width': 2.5 },
+        });
+
+        map.on('click', fillLayerId, () => navigate(`/sites/${site.id}`));
+        map.on('mouseenter', fillLayerId, () => {
+          map.getCanvas().style.cursor = 'pointer';
+        });
+        map.on('mouseleave', fillLayerId, () => {
+          map.getCanvas().style.cursor = '';
+        });
+      }
+
+      if (geojson.coordinates && geojson.coordinates[0]) {
+        geojson.coordinates[0].forEach((coord) => {
+          if (Array.isArray(coord) && coord.length >= 2) {
+            bounds.extend(coord);
+            hasValidCoords = true;
+          }
+        });
+      }
+    });
+
+    if (hasValidCoords && !bounds.isEmpty()) {
+      map.fitBounds(bounds, { padding: 80, maxZoom: 14 });
+    }
+  }, [navigate]);
+
+  // Mapbox Initialization
   useEffect(() => {
     if (loading || !mapContainerRef.current) return;
 
@@ -126,70 +189,18 @@ export default function ProjectMapPage() {
 
     map.on('load', () => {
       map.resize();
-
-      if (sites && sites.length > 0) {
-        const bounds = new mapboxgl.LngLatBounds();
-        let hasValidCoords = false;
-
-        sites.forEach((site) => {
-          const geojson = site.polygon_geojson;
-          if (!geojson || !geojson.coordinates) return;
-
-          const sourceId = `site-src-${site.id}`;
-          const fillLayerId = `site-fill-${site.id}`;
-          const lineLayerId = `site-line-${site.id}`;
-
-          if (map.getSource(sourceId)) return;
-
-          map.addSource(sourceId, {
-            type: 'geojson',
-            data: {
-              type: 'Feature',
-              geometry: geojson,
-              properties: { name: site.name, id: site.id },
-            },
-          });
-
-          map.addLayer({
-            id: fillLayerId,
-            type: 'fill',
-            source: sourceId,
-            paint: { 'fill-color': '#10B981', 'fill-opacity': 0.35 },
-          });
-
-          map.addLayer({
-            id: lineLayerId,
-            type: 'line',
-            source: sourceId,
-            paint: { 'line-color': '#34D399', 'line-width': 2.5 },
-          });
-
-          if (geojson.coordinates && geojson.coordinates[0]) {
-            geojson.coordinates[0].forEach((coord) => {
-              if (Array.isArray(coord) && coord.length >= 2) {
-                bounds.extend(coord);
-                hasValidCoords = true;
-              }
-            });
-          }
-
-          map.on('click', fillLayerId, () => navigate(`/sites/${site.id}`));
-          map.on('mouseenter', fillLayerId, () => {
-            map.getCanvas().style.cursor = 'pointer';
-          });
-          map.on('mouseleave', fillLayerId, () => {
-            map.getCanvas().style.cursor = '';
-          });
-        });
-
-        if (hasValidCoords && !bounds.isEmpty()) {
-          map.fitBounds(bounds, { padding: 80, maxZoom: 14 });
-        }
-      }
+      renderPolygonsOnMap(map, sites);
     });
 
     return () => map.remove();
-  }, [loading, sites, navigate]);
+  }, [loading, navigate, renderPolygonsOnMap, sites]);
+
+  // Re-render polygons when sites array updates
+  useEffect(() => {
+    if (mapRef.current && mapRef.current.isStyleLoaded()) {
+      renderPolygonsOnMap(mapRef.current, sites);
+    }
+  }, [sites, renderPolygonsOnMap]);
 
   const handleStartDraw = () => {
     setIsDrawing(true);
@@ -301,13 +312,15 @@ export default function ProjectMapPage() {
           {/* Mode Switch: Drawing Form vs Site List */}
           {isDrawing ? (
             <div className="p-4 space-y-4 overflow-y-auto flex-1 animate-fade-in">
-              <div className="bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-xl text-xs text-emerald-300 space-y-1">
+              <div className="bg-emerald-500/10 border border-emerald-500/20 p-3.5 rounded-xl text-xs text-emerald-300 space-y-1.5">
                 <span className="font-bold flex items-center space-x-1.5 text-emerald-400">
                   <MousePointer className="w-3.5 h-3.5" />
-                  <span>Draw Site Boundary</span>
+                  <span>Drawing Boundary Polygon</span>
                 </span>
-                <p className="text-[11px] text-slate-300">
-                  Click vertices on the map to enclose your target site polygon. (Press <kbd className="bg-slate-800 px-1 py-0.5 rounded text-[10px] text-slate-400">Esc</kbd> anytime to exit drawing mode).
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  1. Click map points to outline boundary.<br />
+                  2. Double-click or click first point to close shape.<br />
+                  3. Enter site name & click <strong>Save Site</strong>.
                 </p>
               </div>
 
@@ -333,7 +346,7 @@ export default function ProjectMapPage() {
                 <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
                   <div className="text-[11px] text-slate-400 font-medium">Boundary Status</div>
                   <div className={`text-xs font-bold ${siteDrawnCoords ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {siteDrawnCoords ? 'Boundary Captured ✓' : 'Click points on map...'}
+                    {siteDrawnCoords ? 'Boundary Captured ✓' : 'Click points on map to define shape...'}
                   </div>
                 </div>
 
@@ -350,7 +363,7 @@ export default function ProjectMapPage() {
                     disabled={savingSite || !siteDrawnCoords}
                     className="w-1/2 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-50 text-slate-950 py-2 rounded-xl font-bold text-xs transition cursor-pointer"
                   >
-                    {savingSite ? 'Saving...' : 'Save Site'}
+                    {savingSite ? 'Saving to PostGIS...' : 'Save Site'}
                   </button>
                 </div>
               </form>
