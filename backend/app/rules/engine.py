@@ -129,11 +129,17 @@ def rule_data_freshness(evidence: list[dict[str, Any]], now) -> list[dict]:
     for e in evidence:
         by_source.setdefault(e["source"], []).append(e)
 
+    now_aware = now if getattr(now, 'tzinfo', None) is not None else now.replace(tzinfo=timezone.utc)
+
     for source, records in by_source.items():
         if source == "synthetic":
             continue
         latest = max(records, key=lambda r: r["fetched_at"])
-        age_days = (now - latest["fetched_at"]).days
+        fetched_at = latest["fetched_at"]
+        if getattr(fetched_at, 'tzinfo', None) is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+
+        age_days = (now_aware - fetched_at).days
         if age_days >= STALE_DATA_DAYS:
             signals.append({
                 "type": "data_freshness_warning",

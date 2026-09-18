@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import mapboxgl from 'mapbox-gl';
 import MapboxDraw from '@mapbox/mapbox-gl-draw';
@@ -6,7 +6,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import { getProject, listSitesByProject, createSite, extractErrorMessage } from '../api/client';
 import AppNavbar from '../components/AppNavbar';
-import { Plus, MapPin, ExternalLink, ShieldAlert, Layers, Search, CheckCircle, ArrowLeft } from 'lucide-react';
+import { Plus, MapPin, ExternalLink, ShieldAlert, Layers, Search, CheckCircle, ArrowLeft, XCircle, MousePointer } from 'lucide-react';
 
 export default function ProjectMapPage() {
   const { projectId } = useParams();
@@ -37,7 +37,7 @@ export default function ProjectMapPage() {
     }
   }, [mapboxToken]);
 
-  const loadData = React.useCallback(async () => {
+  const loadData = useCallback(async () => {
     try {
       setError('');
       const [projRes, sitesRes] = await Promise.all([
@@ -57,6 +57,32 @@ export default function ProjectMapPage() {
     loadData();
   }, [loadData]);
 
+  // Exit drawing mode function
+  const handleExitDraw = useCallback(() => {
+    setIsDrawing(false);
+    setSiteName('');
+    setSiteDrawnCoords(null);
+    setDrawError('');
+    if (drawRef.current) {
+      try {
+        drawRef.current.deleteAll();
+        drawRef.current.changeMode('simple_select');
+      } catch (e) {
+        console.warn('Mapbox draw mode change warning:', e);
+      }
+    }
+  }, []);
+
+  // Listen for Escape key to exit drawing mode
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isDrawing) {
+        handleExitDraw();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isDrawing, handleExitDraw]);
 
   // Mapbox Initialization & Layer Updates
   useEffect(() => {
@@ -172,17 +198,6 @@ export default function ProjectMapPage() {
     if (drawRef.current) drawRef.current.changeMode('draw_polygon');
   };
 
-  const handleCancelDraw = () => {
-    setIsDrawing(false);
-    setSiteName('');
-    setSiteDrawnCoords(null);
-    setDrawError('');
-    if (drawRef.current) {
-      drawRef.current.deleteAll();
-      drawRef.current.changeMode('simple_select');
-    }
-  };
-
   const handleSaveSite = async (e) => {
     e.preventDefault();
     setDrawError('');
@@ -204,7 +219,7 @@ export default function ProjectMapPage() {
         polygon: siteDrawnCoords,
       });
 
-      handleCancelDraw();
+      handleExitDraw();
       setSaveSuccessMsg(`Site "${newSite.name}" saved successfully to PostGIS.`);
       await loadData();
     } catch (err) {
@@ -220,24 +235,24 @@ export default function ProjectMapPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-slate-400 text-xs font-medium">
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-xs font-medium">
         Loading spatial environment & PostGIS boundaries...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col h-screen overflow-hidden">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden">
       <AppNavbar project={project} />
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
         {/* Left Sidebar: Site List & Controls */}
-        <div className="w-full md:w-96 bg-slate-800 border-b md:border-b-0 md:border-r border-slate-700/80 flex flex-col z-10 shrink-0">
+        <div className="w-full md:w-96 bg-slate-900 border-b md:border-b-0 md:border-r border-slate-800 flex flex-col z-10 shrink-0">
           {/* Header & Back Navigation */}
-          <div className="p-4 border-b border-slate-700/80 space-y-3">
+          <div className="p-4 border-b border-slate-800 space-y-3">
             <button
               onClick={() => navigate('/dashboard')}
-              className="text-slate-400 hover:text-white text-xs flex items-center space-x-1 transition"
+              className="text-slate-400 hover:text-white text-xs flex items-center space-x-1.5 transition cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Back to Dashboard</span>
@@ -252,17 +267,18 @@ export default function ProjectMapPage() {
               {!isDrawing ? (
                 <button
                   onClick={handleStartDraw}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-md font-semibold text-xs flex items-center space-x-1.5 transition cursor-pointer"
+                  className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-3 py-1.5 rounded-lg font-bold text-xs flex items-center space-x-1.5 transition shadow-md shadow-emerald-950/40 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Add Site</span>
                 </button>
               ) : (
                 <button
-                  onClick={handleCancelDraw}
-                  className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-md font-medium text-xs transition cursor-pointer"
+                  onClick={handleExitDraw}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg font-medium text-xs flex items-center space-x-1 transition cursor-pointer"
                 >
-                  Cancel
+                  <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Exit Mode</span>
                 </button>
               )}
             </div>
@@ -270,64 +286,69 @@ export default function ProjectMapPage() {
 
           {/* Toast / Error Banner */}
           {saveSuccessMsg && (
-            <div className="m-3 p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs rounded-md flex items-center space-x-2">
+            <div className="m-3 p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs rounded-lg flex items-center space-x-2 animate-fade-in">
               <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>{saveSuccessMsg}</span>
             </div>
           )}
 
           {error && (
-            <div className="m-3 p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-md">
+            <div className="m-3 p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-lg animate-fade-in">
               {error}
             </div>
           )}
 
           {/* Mode Switch: Drawing Form vs Site List */}
           {isDrawing ? (
-            <div className="p-4 space-y-4 overflow-y-auto flex-1">
-              <div className="bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-md text-xs text-emerald-300">
-                <span className="font-semibold block mb-0.5">Draw Site Boundary</span>
-                Click points on the Mapbox satellite map to enclose your target site boundary.
+            <div className="p-4 space-y-4 overflow-y-auto flex-1 animate-fade-in">
+              <div className="bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-xl text-xs text-emerald-300 space-y-1">
+                <span className="font-bold flex items-center space-x-1.5 text-emerald-400">
+                  <MousePointer className="w-3.5 h-3.5" />
+                  <span>Draw Site Boundary</span>
+                </span>
+                <p className="text-[11px] text-slate-300">
+                  Click vertices on the map to enclose your target site polygon. (Press <kbd className="bg-slate-800 px-1 py-0.5 rounded text-[10px] text-slate-400">Esc</kbd> anytime to exit drawing mode).
+                </p>
               </div>
 
               {drawError && (
-                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-md">
+                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-lg">
                   {drawError}
                 </div>
               )}
 
               <form onSubmit={handleSaveSite} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">Site Name</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Site Name</label>
                   <input
                     type="text"
                     required
                     value={siteName}
                     onChange={(e) => setSiteName(e.target.value)}
                     placeholder="e.g. Riparian Corridor Plot 1"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                   />
                 </div>
 
-                <div className="bg-slate-900/60 p-3 rounded-md border border-slate-700/50">
-                  <div className="text-[11px] text-slate-400 font-medium">Boundary Polygon Capture</div>
-                  <div className={`text-xs font-bold mt-1 ${siteDrawnCoords ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {siteDrawnCoords ? 'Boundary Captured ✓' : 'Drawing on Map... (click points)'}
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
+                  <div className="text-[11px] text-slate-400 font-medium">Boundary Status</div>
+                  <div className={`text-xs font-bold ${siteDrawnCoords ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {siteDrawnCoords ? 'Boundary Captured ✓' : 'Click points on map...'}
                   </div>
                 </div>
 
                 <div className="flex items-center space-x-2 pt-2">
                   <button
                     type="button"
-                    onClick={handleCancelDraw}
-                    className="w-1/2 bg-slate-700 hover:bg-slate-600 text-slate-300 py-2 rounded-md font-medium text-xs transition"
+                    onClick={handleExitDraw}
+                    className="w-1/2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 py-2 rounded-xl font-medium text-xs transition cursor-pointer"
                   >
-                    Cancel
+                    Cancel / Exit
                   </button>
                   <button
                     type="submit"
                     disabled={savingSite || !siteDrawnCoords}
-                    className="w-1/2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white py-2 rounded-md font-semibold text-xs transition cursor-pointer"
+                    className="w-1/2 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-50 text-slate-950 py-2 rounded-xl font-bold text-xs transition cursor-pointer"
                   >
                     {savingSite ? 'Saving...' : 'Save Site'}
                   </button>
@@ -337,7 +358,7 @@ export default function ProjectMapPage() {
           ) : (
             <div className="flex-1 flex flex-col overflow-hidden">
               {/* Search Bar */}
-              <div className="p-3 border-b border-slate-700/50">
+              <div className="p-3 border-b border-slate-800">
                 <div className="relative">
                   <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
                   <input
@@ -345,7 +366,7 @@ export default function ProjectMapPage() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search sites..."
-                    className="w-full bg-slate-900 border border-slate-700/80 rounded-md pl-9 pr-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
               </div>
@@ -354,7 +375,7 @@ export default function ProjectMapPage() {
               <div className="p-3 flex-1 overflow-y-auto space-y-2">
                 {filteredSites.length === 0 ? (
                   <div className="text-center py-10 text-slate-500 text-xs">
-                    <Layers className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                    <Layers className="w-8 h-8 mx-auto mb-2 opacity-40 text-slate-400" />
                     No sites found. Click "Add Site" to draw a boundary polygon.
                   </div>
                 ) : (
@@ -362,7 +383,7 @@ export default function ProjectMapPage() {
                     <div
                       key={site.id}
                       onClick={() => navigate(`/sites/${site.id}`)}
-                      className="p-3 bg-slate-900/50 hover:bg-slate-700/40 border border-slate-700/50 rounded-lg cursor-pointer transition flex items-center justify-between group"
+                      className="p-3.5 bg-slate-850 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/40 rounded-xl cursor-pointer transition flex items-center justify-between group"
                     >
                       <div className="flex items-center space-x-3">
                         <MapPin className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -370,7 +391,7 @@ export default function ProjectMapPage() {
                           <div className="text-xs font-semibold text-slate-200 group-hover:text-emerald-400 transition">
                             {site.name}
                           </div>
-                          <div className="text-[10px] text-slate-500 mt-0.5">
+                          <div className="text-[10px] text-slate-400 mt-0.5">
                             Area: {site.area_hectares || '0'} ha • ID #{site.id}
                           </div>
                         </div>
@@ -386,6 +407,24 @@ export default function ProjectMapPage() {
 
         {/* Right Area: Large Mapbox Map */}
         <div className="flex-1 h-[50vh] md:h-full relative bg-slate-950">
+          {/* Overlay Exit Drawing Banner on Map when active */}
+          {isDrawing && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-slate-900/90 border border-emerald-500/40 text-white px-4 py-2 rounded-full text-xs flex items-center space-x-3 backdrop-blur-md shadow-2xl animate-fade-in">
+              <span className="flex items-center space-x-1.5 text-emerald-400 font-semibold">
+                <MousePointer className="w-3.5 h-3.5 animate-pulse" />
+                <span>Drawing Mode Active</span>
+              </span>
+              <span className="text-slate-600">|</span>
+              <button
+                onClick={handleExitDraw}
+                className="text-xs font-bold text-rose-400 hover:text-rose-300 flex items-center space-x-1 underline cursor-pointer"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                <span>Exit Drawing Mode</span>
+              </button>
+            </div>
+          )}
+
           {!mapboxToken && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-amber-500/10 border border-amber-500/30 text-amber-300 px-4 py-2 rounded-lg text-xs flex items-center space-x-2 backdrop-blur-md shadow-lg">
               <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />

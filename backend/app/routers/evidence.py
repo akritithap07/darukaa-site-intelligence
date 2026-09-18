@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -16,6 +17,14 @@ router = APIRouter(prefix="/sites", tags=["evidence"])
 CACHE_TTL_HOURS = 6  # do not re-hit external APIs more often than this
 BASELINE_DAYS_AGO = (60, 30)  # (start_days_ago, end_days_ago) for baseline window
 CURRENT_DAYS_AGO = (30, 0)  # for current window
+
+
+def _ensure_utc_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _get_owned_site(site_id: int, db: Session, user: User) -> Site:
@@ -37,9 +46,11 @@ def _cache_fresh(source: str, site_id: int, db: Session) -> bool:
         .order_by(EvidenceSnapshot.fetched_at.desc())
         .first()
     )
-    if not latest:
+    if not latest or not latest.fetched_at:
         return False
-    age = datetime.now(timezone.utc) - latest.fetched_at.replace(tzinfo=timezone.utc)
+    fetched_at = _ensure_utc_aware(latest.fetched_at)
+    now = datetime.now(timezone.utc)
+    age = now - fetched_at
     return age < timedelta(hours=CACHE_TTL_HOURS)
 
 
@@ -48,7 +59,6 @@ def _ensure_gbif_evidence(site: Site, db: Session):
         return
     if site.geom is None or site.centroid_lat is None:
         return
-    # Small bounding box around centroid (~0.2 degrees) so the query stays lightweight
     delta = 0.2
     result = gbif.fetch_occurrences(
         min_lat=site.centroid_lat - delta,
@@ -57,7 +67,6 @@ def _ensure_gbif_evidence(site: Site, db: Session):
         max_lon=site.centroid_lon + delta,
     )
     if not result["ok"]:
-        # Record a clearly-labeled failure snapshot; never pretend the call worked.
         snap = EvidenceSnapshot(
             site_id=site.id,
             source="gbif",
@@ -76,12 +85,12 @@ def _ensure_gbif_evidence(site: Site, db: Session):
         observed_at = None
         if record.get("observed_at"):
             try:
-                observed_at = datetime.fromisoformat(record["observed_at"].replace("Z", "+00:00"))
+                observed_at = _ensure_utc_aware(datetime.fromisoformat(record["observed_at"].replace("Z", "+00:00")))
             except Exception:
                 observed_at = None
         period = "current"
         if observed_at and (now - observed_at).days > CURRENT_DAYS_AGO[1] + 365:
-            period = "baseline"  # older records treated as baseline context
+            period = "baseline"
         snap = EvidenceSnapshot(
             site_id=site.id,
             source="gbif",
@@ -183,7 +192,7 @@ def get_site_detail(site_id: int, db: Session = Depends(get_db), user: User = De
             "source": e.source,
             "evidence_type": e.evidence_type,
             "period_label": e.period_label,
-            "fetched_at": e.fetched_at.replace(tzinfo=timezone.utc) if e.fetched_at.tzinfo is None else e.fetched_at,
+            "fetched_at": _ensure_utc_aware(e.fetched_at),
             "payload": e.payload or {},
         }
         for e in evidence_rows
