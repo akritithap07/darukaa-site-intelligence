@@ -18,27 +18,35 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Authentication API
+// API Helper Objects
 export const authApi = {
   login: (credentials) => api.post('/auth/login', credentials),
   register: (data) => api.post('/auth/register', data),
 };
 
-// Projects API
 export const projectsApi = {
   list: () => api.get('/projects/'),
   create: (data) => api.post('/projects/', data),
   getProject: (id) => api.get(`/projects/${id}`),
 };
 
-// Sites API
 export const sitesApi = {
   getDetail: (id) => api.get(`/sites/${id}/detail`),
   create: (data) => api.post('/sites/', data),
+  listByProject: (projectId) => api.get(`/projects/${projectId}/sites/`),
 };
 
-// Standalone named function exports for direct page imports
+// Standalone Named Functions (Direct Page Imports)
+export const login = (credentials) => authApi.login(credentials);
+export const register = (data) => authApi.register(data);
+export const logout = () => { localStorage.removeItem('token'); };
+export const isAuthenticated = () => Boolean(localStorage.getItem('token'));
+
+export const listProjects = () => projectsApi.list();
 export const getProject = (id) => projectsApi.getProject(id);
+export const createProject = (data) => projectsApi.create(data);
+
+export const listSitesByProject = (projectId) => sitesApi.listByProject(projectId);
 export const createSite = (data) => sitesApi.create(data);
 export const getSiteDetail = (id) => sitesApi.getDetail(id);
 

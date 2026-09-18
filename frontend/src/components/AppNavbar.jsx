@@ -1,10 +1,9 @@
 import React from 'react';
-import { useNavigate, Link, useLocation } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Globe, LayoutDashboard, LogOut, ChevronRight } from 'lucide-react';
 
 export default function AppNavbar({ project, site }) {
   const navigate = useNavigate();
-  const location = useLocation();
 
   const handleLogout = () => {
     localStorage.removeItem('token');

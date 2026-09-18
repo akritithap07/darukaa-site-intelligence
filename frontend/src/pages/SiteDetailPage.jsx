@@ -58,11 +58,9 @@ export default function SiteDetailPage() {
 
   const { site, evidence = [], rules_output = {} } = siteData;
 
-  // Separate evidence sources
   const gbifRecords = evidence.filter((e) => e.source === 'GBIF');
   const nasaRecords = evidence.filter((e) => e.source === 'NASA POWER');
 
-  // Chart configuration for NASA Climate trends
   const climateChartData = {
     labels: nasaRecords.map((r) => r.observed_at ? new Date(r.observed_at).toLocaleDateString() : 'N/A'),
     datasets: [
