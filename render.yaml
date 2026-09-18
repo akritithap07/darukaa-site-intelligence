@@ -1,0 +1,27 @@
+databases:
+  - name: darukaa-db
+    databaseName: darukaa
+    plan: free
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: darukaa-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: darukaa-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://darukaa-site-intelligence.vercel.app
+      - key: PYTHON_VERSION
+        value: "3.13.15"
+
+        
