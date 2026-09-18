@@ -9,11 +9,17 @@ class Settings(BaseSettings):
     API_V1_STR: str = ""
     
     SECRET_KEY: str = "super-secret-key-change-in-production"
+    JWT_SECRET: str = "super-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
+    JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    JWT_EXPIRE_MINUTES: int = 60 * 24 * 7
     
     DATABASE_URL: str = "postgresql://darukaa:darukaa123@localhost:5432/darukaa_db"
     CORS_ORIGINS: Union[str, List[str]] = "*"
+
+    GBIF_BASE_URL: str = "https://api.gbif.org/v1/occurrence/search"
+    NASA_POWER_BASE_URL: str = "https://power.larc.nasa.gov/api/temporal/daily/point"
 
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
@@ -25,6 +31,26 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return self.DATABASE_URL
+
+    @property
+    def jwt_secret(self) -> str:
+        return self.JWT_SECRET or self.SECRET_KEY
+
+    @property
+    def jwt_algorithm(self) -> str:
+        return self.JWT_ALGORITHM or self.ALGORITHM
+
+    @property
+    def jwt_expire_minutes(self) -> int:
+        return self.JWT_EXPIRE_MINUTES or self.ACCESS_TOKEN_EXPIRE_MINUTES
+
+    @property
+    def gbif_base_url(self) -> str:
+        return self.GBIF_BASE_URL
+
+    @property
+    def nasa_power_base_url(self) -> str:
+        return self.NASA_POWER_BASE_URL
 
     def cors_origin_list(self) -> List[str]:
         if isinstance(self.CORS_ORIGINS, list):

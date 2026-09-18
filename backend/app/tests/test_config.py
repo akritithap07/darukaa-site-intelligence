@@ -1,4 +1,3 @@
-
 from app.core.config import Settings
 
 
@@ -24,3 +23,12 @@ def test_cors_comma_separated(monkeypatch):
     monkeypatch.setenv("CORS_ORIGINS", "https://a.example,https://b.example")
     settings = Settings()
     assert settings.cors_origin_list() == ["https://a.example", "https://b.example"]
+
+
+def test_jwt_and_adapters_config():
+    settings = Settings()
+    assert settings.jwt_secret is not None
+    assert settings.jwt_algorithm == "HS256"
+    assert settings.jwt_expire_minutes > 0
+    assert "gbif.org" in settings.gbif_base_url
+    assert "nasa.gov" in settings.nasa_power_base_url
