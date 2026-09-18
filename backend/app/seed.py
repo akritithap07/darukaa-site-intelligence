@@ -7,25 +7,28 @@ Run with: python -m app.seed
 from geoalchemy2.shape import from_shape
 from shapely.geometry import Polygon
 
-from app.core.db import Base, engine, SessionLocal
+from app.core.db import Base, SessionLocal, engine, ensure_postgis
 from app.core.security import hash_password
-from app.models.models import User, Project, Site
+from app.models.models import Project, Site, User
 
 DEMO_EMAIL = "demo@darukaa.earth"
 DEMO_PASSWORD = "demo1234"
 
 
 def make_square(center_lat, center_lon, half_side_deg=0.01):
-    return Polygon([
-        (center_lon - half_side_deg, center_lat - half_side_deg),
-        (center_lon + half_side_deg, center_lat - half_side_deg),
-        (center_lon + half_side_deg, center_lat + half_side_deg),
-        (center_lon - half_side_deg, center_lat + half_side_deg),
-        (center_lon - half_side_deg, center_lat - half_side_deg),
-    ])
+    return Polygon(
+        [
+            (center_lon - half_side_deg, center_lat - half_side_deg),
+            (center_lon + half_side_deg, center_lat - half_side_deg),
+            (center_lon + half_side_deg, center_lat + half_side_deg),
+            (center_lon - half_side_deg, center_lat + half_side_deg),
+            (center_lon - half_side_deg, center_lat - half_side_deg),
+        ]
+    )
 
 
 def run():
+    ensure_postgis()
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:

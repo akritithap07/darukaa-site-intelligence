@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
-from app.core.db import Base, engine
 from app.core.config import settings
-from app.routers import auth, projects, sites, evidence
+from app.core.db import Base, engine, ensure_postgis
+from app.routers import auth, evidence, projects, sites
 
 app = FastAPI(
     title="Darukaa Earth — Site Intelligence MVP",
@@ -13,7 +14,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.cors_origin_list(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -22,12 +23,19 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup():
+    ensure_postgis()
     Base.metadata.create_all(bind=engine)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    postgis_version = None
+    try:
+        with engine.connect() as conn:
+            postgis_version = conn.execute(text("SELECT PostGIS_Version()")).scalar()
+    except Exception:
+        postgis_version = None
+    return {"status": "ok", "postgis": postgis_version}
 
 
 app.include_router(auth.router)

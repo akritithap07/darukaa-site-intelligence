@@ -2,7 +2,7 @@ databases:
   - name: darukaa-db
     databaseName: darukaa
     plan: free
-    postgresMajorVersion: 16
+    postgresMajorVersion: "16"
 
 services:
   - type: web
@@ -20,4 +20,6 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: CORS_ORIGINS
-        value: "https://your-frontend.vercel.app"
+        value: "*"
+      - key: PYTHON_VERSION
+        value: "3.13.15"
