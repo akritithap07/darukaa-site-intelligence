@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-const client = axios.create({
+const api = axios.create({
   baseURL,
   headers: {
     'Content-Type': 'application/json',
@@ -10,7 +10,7 @@ const client = axios.create({
 });
 
 // Interceptor to attach Authorization header if token exists
-client.interceptors.request.use((config) => {
+api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -20,21 +20,21 @@ client.interceptors.request.use((config) => {
 
 // Authentication API
 export const authApi = {
-  login: (credentials) => client.post('/auth/login', credentials),
-  register: (data) => client.post('/auth/register', data),
+  login: (credentials) => api.post('/auth/login', credentials),
+  register: (data) => api.post('/auth/register', data),
 };
 
 // Projects API
 export const projectsApi = {
-  list: () => client.get('/projects/'),
-  create: (data) => client.post('/projects/', data),
-  getProject: (id) => client.get(`/projects/${id}`),
+  list: () => api.get('/projects/'),
+  create: (data) => api.post('/projects/', data),
+  getProject: (id) => api.get(`/projects/${id}`),
 };
 
 // Sites API
 export const sitesApi = {
-  getDetail: (id) => client.get(`/sites/${id}/detail`),
-  create: (data) => client.post('/sites/', data),
+  getDetail: (id) => api.get(`/sites/${id}/detail`),
+  create: (data) => api.post('/sites/', data),
 };
 
 // Standalone named function exports for direct page imports
@@ -42,4 +42,4 @@ export const getProject = (id) => projectsApi.getProject(id);
 export const createSite = (data) => sitesApi.create(data);
 export const getSiteDetail = (id) => sitesApi.getDetail(id);
 
-export default client;
+export default api;
