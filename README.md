@@ -1,232 +1,1038 @@
-# Darukaa Earth — Site Intelligence MVP
+# Darukaa Earth — Site Intelligence
 
-## 1. Overview
+A production-oriented full-stack geospatial intelligence workspace for environmental project teams to manage projects, define geographical sites, inspect evidence, compare baseline and current observations, and surface transparent site-level changes that require attention.
 
-A geospatial site-monitoring MVP built for the Darukaa.Earth Full-Stack Developer Hackathon Challenge. It lets a user draw a site polygon on a map, then view evidence-backed signals about that site — combining a prototype baseline dataset with **real** live data from GBIF (species occurrences) and NASA POWER (climate).
+> **Product principle:**  
+> **SITE → EVIDENCE → SIGNAL → INSIGHT → ACTION**
 
-## 2. Problem
-
-Nature-finance and biodiversity-disclosure workflows (TNFD/BRSR, carbon/biodiversity credit registries) need auditable, source-labeled evidence — not black-box scores. Most monitoring dashboards blend disparate data into a single "health score" that isn't scientifically defensible. This MVP demonstrates a different approach: keep evidence provenance visible, keep the reasoning deterministic, and never claim more than the data supports.
-
-## 3. Product Thesis
-
-```
-SITE → EVIDENCE → SIGNAL → INSIGHT → ACTION
-```
-
-The site (a polygon) is the unit of intelligence. Evidence (GBIF, NASA POWER, synthetic baseline) accumulates against it. A deterministic rule engine turns evidence into signals. Signals are surfaced as "What Changed" / "Needs Attention" — the insight that leads to an action (e.g., field verification).
-
-## 4. User Workflow
-
-Login → Project Dashboard → Interactive Map → Select/Create Site → Draw Polygon → Site Detail → Evidence → Baseline vs Current → What Changed / Needs Attention
-
-## 5. Key Features
-
-**Mandatory (P0):** React + Vite, Mapbox GL JS + Mapbox Draw, Chart.js, FastAPI, PostgreSQL + PostGIS, JWT auth, GitHub Actions CI, pre-commit/Husky/lint-staged/Prettier, deployment config.
-
-**Differentiators (P1):** evidence provenance + freshness labels, baseline vs current comparison, real GBIF integration, real NASA POWER integration, deterministic "What Changed / Needs Attention" rule engine.
-
-## 6. Architecture
-
-```
-React (Vite)
-   │  JWT bearer requests
-   ▼
-FastAPI REST API
-   │
-   ▼
-PostgreSQL + PostGIS  ◄── Evidence Snapshot Store (append-only)
-   │
-   ▼
-Deterministic Signal / Rule Engine (pure Python, no I/O)
-   │
-   ▼
-React UI (Site Detail)
-
-External sources:
-GBIF Adapter ────┐
-                  ├──► Evidence Snapshot Store (cached, provenance-tagged)
-NASA POWER Adapter┘
-```
-
-Adapters are isolated backend modules (`app/adapters/`) producing a generic normalized evidence shape, so future sources (satellite, bioacoustics, camera traps, field app) can be added without changing the rule engine or the UI contract.
-
-## 7. Database Schema
-
-```
-users(id, email, hashed_password, created_at)
-projects(id, name, description, owner_id → users.id, created_at)
-sites(id, project_id → projects.id, name, geom [PostGIS POLYGON, SRID 4326],
-      centroid_lat, centroid_lon, area_hectares, created_at, updated_at)
-evidence_snapshots(id, site_id → sites.id, source, source_record_id, evidence_type,
-                    period_label, observed_at, fetched_at, payload [JSON],
-                    is_real, metadata_json)
-```
-
-`evidence_snapshots` is intentionally append-only and generic — it is the provenance backbone. Signals are **never** persisted as stored fact; they are recomputed on read from the evidence rows.
-
-## 8. PostGIS / Geospatial Approach
-
-Site polygons are stored as native PostGIS `POLYGON` geometry (SRID 4326) via GeoAlchemy2/Shapely. On creation, the API computes the centroid and an approximate hectare area (planar approximation at the site's latitude — see Limitations). GeoJSON is round-tripped through `to_shape`/`from_shape` for the Mapbox frontend.
-
-## 9. Evidence Provenance Model
-
-Every evidence row carries: `source` (gbif / nasa_power / synthetic), `source_record_id`, `evidence_type`, `period_label` (baseline/current), `observed_at`, `fetched_at`, `is_real`, and `metadata_json`. The UI shows a **Real data** or **Prototype / Synthetic** badge on every evidence item, and the provenance log lists source + fetch timestamp for all records. If an external API call fails, the failure itself is stored as a labeled `fetch_error` snapshot with `is_real: false` — the system never silently pretends a call succeeded.
-
-## 10. GBIF Integration
-
-Calls the official GBIF occurrence search API (`api.gbif.org/v1/occurrence/search`) with a bounding box around the site centroid. Normalizes each result to `{species, scientific_name, observed_at, basis_of_record}`. **Only ever used to state**: species observed, distinct species count, observation dates. **Never used to compute** a biodiversity health score — GBIF presence data says a species was observed, not that habitat health is any particular value.
-
-## 11. NASA POWER Integration
-
-Calls the official NASA POWER daily point API for temperature (`T2M`) and precipitation (`PRECTOTCORR`) at the site centroid, for a baseline window and a current window. Used strictly as climate **context** — the UI and rule engine never claim precipitation change caused a biodiversity outcome.
-
-## 12. Baseline vs Current Approach
-
-Two explicit time windows are defined as constants (`app/routers/evidence.py`): baseline (60–30 days ago) and current (30–0 days ago). Each evidence source's records are tagged with a `period_label`. The `/sites/{id}/detail` endpoint aggregates distinct species count and average climate values per period, and the frontend renders them side by side. Comparisons are only computed where semantically valid (e.g., species counts are counted, not averaged; climate values are averaged, not summed).
-
-## 13. Deterministic Signal / Rule Engine
-
-`app/rules/engine.py` is a pure Python module — no FastAPI/SQLAlchemy imports, no randomness, no ML. It takes normalized evidence dicts and a timestamp, and returns a list of `{type, direction, severity, message, evidence_refs}` signals. Three rules ship: new-species-observed (info), climate deviation beyond a configurable threshold (attention), and stale/missing source data (attention). All thresholds are named constants at the top of the file. **7 unit tests** cover: new species detection, "no observations" (not zero) messaging, precipitation deviation triggering, no-signal-within-threshold, stale data flagging, synthetic sources never flagged stale, and the combined `evaluate()` entrypoint. All 7 pass (verified — see Test Results below).
-
-## 14. Data Limitations
-
-- Area calculation uses a planar degree→meter approximation at the site's latitude, not a proper equal-area reprojection — acceptable for a prototype at typical site scale, not for precise cadastral area.
-- GBIF/NASA POWER calls are made synchronously on first request to a site's detail page and cached for 6 hours; there is no retry/backoff yet (see Scalability Roadmap).
-- "Baseline" vs "current" for GBIF records is inferred from `eventDate` relative to now, not from a registry-defined baseline period — this is a modeling simplification, documented here rather than hidden.
-- **In this development/sandboxed environment, outbound calls to `api.gbif.org` and `power.larc.nasa.gov` were blocked by network egress rules (HTTP 403)** — verified live during testing. The system correctly degraded: it stored labeled `fetch_error` evidence snapshots (`is_real: false`) instead of fabricating data, and the rule engine correctly produced zero signals from zero real evidence. In an unrestricted deployment (e.g., Render), these calls are expected to succeed — the code path has no environment-specific logic blocking them.
-
-## 15. Real vs Synthetic Data
-
-Every evidence row has `is_real: true` (from GBIF/NASA) or `is_real: false` (synthetic/prototype or a fetch failure). The frontend renders a `Real data` / `Prototype / Synthetic` badge on every evidence item and on the provenance log — there is no path in the UI that displays synthetic data without that label.
-
-## 16. Security
-
-- Passwords hashed with bcrypt via passlib.
-- JWT secret and database URL read from environment variables (`JWT_SECRET`, `DATABASE_URL`) — never hardcoded. Verified: `.env` files are git-ignored; only `.env.example` (placeholders) is committed.
-- Mapbox token is read from `VITE_MAPBOX_TOKEN` at build time — never hardcoded (verified via grep).
-- All project/site/evidence endpoints require a valid JWT (`Depends(get_current_user)`) and filter by `owner_id` — verified live: unauthenticated requests to `/projects` and `POST /projects` both return `401 Not authenticated`.
-- CORS origins are explicitly configured via `CORS_ORIGINS` env var, not wildcard-by-default in production config (`docker-compose.yml` sets it to the frontend origin).
-- **Not implemented** (out of scope for this MVP, noted honestly): rate limiting, refresh tokens, RBAC, secrets rotation, HTTPS termination (handled by the hosting platform, not the app).
-
-## 17. Local Setup
-
-**Requirements:** Docker + Docker Compose, or Python 3.11 + Node 20 + a local PostgreSQL/PostGIS instance.
-
-### Option A — Docker Compose (recommended)
-
-```bash
-git clone <repo-url>
-cd darukaa
-docker compose up --build
-# Backend: http://localhost:8000  (seeds demo data automatically)
-cd frontend
-cp .env.example .env   # fill in VITE_MAPBOX_TOKEN
-npm install
-npm run dev             # http://localhost:5173
-```
-
-### Option B — Manual
-
-```bash
-# Backend
-cd backend
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env    # edit DATABASE_URL / JWT_SECRET
-python -m app.seed
-uvicorn app.main:app --reload
-
-# Frontend
-cd frontend
-cp .env.example .env    # fill in VITE_MAPBOX_TOKEN
-npm install
-npm run dev
-```
-
-Demo login (after seeding): `demo@darukaa.earth` / `demo1234`
-
-## 18. Environment Variables
-
-**Backend (`backend/.env`):**
-| Variable | Description |
-|---|---|
-| `DATABASE_URL` | PostgreSQL/PostGIS connection string |
-| `JWT_SECRET` | Secret for signing JWTs — set a real random value in production |
-| `CORS_ORIGINS` | Comma-separated allowed frontend origins |
-
-**Frontend (`frontend/.env`):**
-| Variable | Description |
-|---|---|
-| `VITE_API_BASE_URL` | Backend API base URL |
-| `VITE_MAPBOX_TOKEN` | Mapbox public access token (get one at mapbox.com) |
-
-## 19. CI/CD
-
-`.github/workflows/ci.yml` runs on every push/PR to `main`:
-- **Frontend job:** `npm install` → `npm run lint` → `npm run build` (all three verified locally to pass — see Test Results).
-- **Backend job:** spins up a real `postgis/postgis:16-3.4` service container, installs dependencies, runs `pytest`.
-
-`.pre-commit-config.yaml` runs `black`/`flake8` on the backend plus generic hygiene hooks; `frontend/package.json` wires Husky's `prepare` script to install a `pre-commit` hook that runs `lint-staged` (ESLint --fix + Prettier) on staged files. Husky requires a git repository to activate (`npm install` correctly reported "`.git` can't be found" in this non-git sandbox — this resolves automatically once the project is `git init`'d, which is expected and not a bug).
-
-## 20. Deployment
-
-**Deployment not performed; configuration prepared.** This sandboxed environment has no network access to Vercel, Render, or Docker Hub. Configuration is ready:
-
-- `frontend/vercel.json` — Vercel build config (SPA rewrites to `index.html`).
-- `render.yaml` — Render Blueprint: a managed PostGIS-capable Postgres database plus a Python web service running `python -m app.seed && uvicorn app.main:app`.
-
-**Exact steps to deploy:**
-1. Push this repo to GitHub.
-2. **Database + Backend (Render):** In Render, "New → Blueprint", point at the repo, it will read `render.yaml` and provision the Postgres DB and the backend service. Set `CORS_ORIGINS` to your eventual Vercel URL once known.
-3. **Frontend (Vercel):** Import the repo, set root directory to `frontend`, set `VITE_API_BASE_URL` to the Render backend URL and `VITE_MAPBOX_TOKEN` to a real Mapbox token, deploy.
-4. Update the backend's `CORS_ORIGINS` env var on Render to the final Vercel URL and redeploy the backend.
-
-## 21. Engineering Trade-offs
-
-- **Synchronous external API calls on first page load** instead of a background task queue — simpler for a 3-hour MVP, at the cost of a slower first `site/detail` load. Documented as the first scalability step.
-- **JWT with no refresh token** — simpler auth flow; access tokens are 24h. A production system would add short-lived access + refresh tokens.
-- **Planar area approximation** instead of a proper geodesic/equal-area calculation — accurate enough for demo-scale sites, wrong at large scale or near the poles.
-- **SQLAlchemy `Base.metadata.create_all()` instead of Alembic migrations** — faster to stand up for a hackathon; a real production system needs versioned migrations before its first schema change.
-
-## 22. Scalability Roadmap
-
-**Current (this MVP):** React → FastAPI → Postgres/PostGIS → evidence snapshots (synchronous ingestion, 6h in-DB cache) → deterministic rule engine.
-
-**Future:**
-- Move GBIF/NASA ingestion behind an async task queue (Celery/RQ) with retry/backoff instead of inline synchronous calls.
-- Partition `evidence_snapshots` by time as volume grows.
-- Add spatial indexing beyond PostGIS defaults for large portfolios (GiST tuning, materialized bounding-box tables).
-- Add adapters for satellite (NDVI), bioacoustics, camera traps, and a future field-data app — the evidence schema and rule-engine input contract already support this without a rewrite.
-- Organization-level access control (the current model is single-owner per project).
-- A reporting/export API once report generation is scoped properly with domain experts (deliberately not built in this MVP — see Output 1's critique of rushing TNFD/BRSR report generation).
-
-## 23. Monetization Hypothesis
-
-**This is a product hypothesis, not Darukaa's confirmed or confidential pricing/business model.** Plausible directions, inferred from Darukaa's public site (API-first integration, TNFD/BRSR-ready reporting, nature-finance dMRV):
-1. Project/site/hectare monitoring subscription.
-2. Premium evidence/reporting tiers.
-3. Enterprise API/data integration licensing.
-4. Verification/MRV professional services.
-5. Advanced monitoring/alerting add-ons.
-
-## 24. Future Work
-
-Real remote-sensing integration, TNFD/BRSR-formatted report export, multi-source confidence modeling (defined with domain scientists, not guessed), organization/team accounts, mobile field-data capture.
+The application was built for the Darukaa.Earth Full-Stack Developer Hackathon Challenge, which requires project management, interactive Mapbox mapping, polygon-based site creation, data visualization, authentication, automated code-quality checks, CI/CD, and a publicly accessible deployment.
 
 ---
 
-## Test Results (actually run, not claimed)
+## 1. Why this product exists
 
-| Check | Result |
+Environmental and nature-related projects generate information from many different systems: geographical boundaries, biodiversity observations, climate datasets, field measurements, and monitoring tools.
+
+The difficult product problem is not simply storing those records. It is helping a person answer:
+
+- What site am I looking at?
+- What evidence do we have for it?
+- Where did the evidence come from?
+- How recent is it?
+- What has changed compared with the baseline?
+- Does anything require human attention?
+
+Darukaa Earth — Site Intelligence addresses this by treating the **site polygon as the primary unit of intelligence**.
+
+The product intentionally avoids inventing a single environmental-health or biodiversity score from heterogeneous datasets. Instead, it preserves the underlying evidence, makes provenance visible, and uses deterministic rules to surface observable changes.
+
+---
+
+# 2. Product workflow
+
+The primary end-to-end workflow is:
+
+```text
+Login
+  ↓
+Project Dashboard
+  ↓
+Select Project
+  ↓
+Project Map
+  ↓
+View existing sites / draw a new polygon
+  ↓
+Save Site
+  ↓
+Site Detail
+  ↓
+Evidence + Provenance
+  ↓
+Baseline vs Current
+  ↓
+What Changed
+  ↓
+Needs Attention
+```
+
+The intended outcome is a decision-ready site view rather than a dashboard full of disconnected metrics.
+
+---
+
+# 3. Core capabilities
+
+## Authentication
+
+- User registration
+- JWT-based login
+- Protected API requests
+- Session/token persistence in the browser
+- Logout
+- Human-readable validation and API error handling
+
+## Project management
+
+- Create a project
+- View project list
+- Open a project workspace
+- Associate multiple geographical sites with a project
+
+## Geospatial site management
+
+- Interactive Mapbox GL JS map
+- Mapbox Draw polygon workflow
+- Site polygon persistence in PostgreSQL/PostGIS
+- Existing site boundaries rendered on the map
+- Site selection from the map or project site list
+- Responsive map layout so the map remains visible across screen sizes
+
+## Site intelligence
+
+- Site metadata and geographic context
+- Evidence timeline
+- Source and freshness/provenance information
+- Baseline vs current comparison
+- Deterministic "What Changed" signals
+- Deterministic "Needs Attention" signals
+- Interactive Chart.js visualizations
+- Explicit differentiation between real external observations and synthetic/prototype data
+
+---
+
+# 4. Data strategy
+
+The application deliberately separates data types instead of merging them into an unsupported score.
+
+## GBIF — biodiversity occurrence evidence
+
+GBIF is used for species occurrence information.
+
+The product uses GBIF to answer questions such as:
+
+> How many distinct species have been observed within the site context during the selected period?
+
+It does **not** interpret occurrence records as a direct measurement of biodiversity health.
+
+## NASA POWER — climate context
+
+NASA POWER is used for climate/weather context such as:
+
+- Temperature
+- Precipitation
+
+These values are presented as environmental context. The system does not claim that a climate observation caused a biodiversity outcome.
+
+## Synthetic / prototype evidence
+
+Seeded demonstration data is explicitly labelled as:
+
+> **Prototype / Synthetic**
+
+This prevents demonstration data from being mistaken for live field or external-source observations.
+
+---
+
+# 5. Evidence provenance
+
+One of the core design decisions is to retain evidence provenance instead of presenting every value as if it were equally current or authoritative.
+
+An evidence record can contain:
+
+```text
+source
+source_record_id
+evidence_type
+period_label
+observed_at
+fetched_at
+payload
+is_real
+metadata_json
+```
+
+The UI exposes this information so reviewers can see:
+
+- where evidence came from
+- when it was observed
+- when it was fetched
+- whether it is real external evidence or synthetic prototype data
+
+This also creates a foundation for future data sources such as field observations, bioacoustics, camera traps, sensors, and remote sensing.
+
+---
+
+# 6. Baseline vs current
+
+The MVP separates observations into two time windows:
+
+```text
+Baseline
+Current
+```
+
+The comparison layer uses source-appropriate aggregation:
+
+- biodiversity occurrence data → distinct observed species
+- climate data → period averages
+- timestamps → retained as provenance rather than flattened away
+
+The "What Changed" layer is calculated from evidence rather than stored as a permanent fact, so new evidence can change the result without requiring a manual update to a precomputed conclusion.
+
+---
+
+# 7. Deterministic signal engine
+
+The signal engine is implemented as a pure Python component.
+
+It does not use:
+
+- an LLM
+- random scoring
+- an arbitrary 0–100 health score
+- unexplained confidence values
+
+It produces structured, reproducible signals such as:
+
+```text
+New species observations detected
+Climate deviation exceeds the configured threshold
+Evidence is stale or missing
+No observations available for the selected period
+```
+
+Each signal is intended to be understandable by a human reviewer.
+
+The rule engine is isolated from FastAPI and database I/O so that the logic can be unit-tested independently.
+
+---
+
+# 8. System architecture
+
+```text
+                          ┌──────────────────────────────┐
+                          │        React + Vite          │
+                          │                              │
+                          │ Dashboard                    │
+                          │ Project Map                  │
+                          │ Site Detail                  │
+                          │ Chart.js                     │
+                          │ Mapbox GL JS + Draw          │
+                          └──────────────┬───────────────┘
+                                         │
+                                      REST/JWT
+                                         │
+                                         ▼
+                          ┌──────────────────────────────┐
+                          │          FastAPI              │
+                          │                              │
+                          │ Authentication               │
+                          │ Projects                     │
+                          │ Sites                        │
+                          │ Evidence                     │
+                          └───────┬────────────┬─────────┘
+                                  │            │
+                                  │            │
+                                  ▼            ▼
+                    ┌──────────────────┐   ┌─────────────────────┐
+                    │ PostgreSQL       │   │ External Sources   │
+                    │ + PostGIS        │   │                     │
+                    │                  │   │ GBIF                │
+                    │ Users            │   │ NASA POWER          │
+                    │ Projects         │   └──────────┬──────────┘
+                    │ Sites + polygons │              │
+                    │ Evidence         │              ▼
+                    └────────┬─────────┘    ┌─────────────────────┐
+                             ▲              │ Source Adapters     │
+                             │              │ Fetch → Normalize   │
+                             │              │ → Store             │
+                             │              └──────────┬──────────┘
+                             │                         │
+                             └─────────────────────────┘
+                                       Evidence
+                                          │
+                                          ▼
+                              ┌────────────────────────┐
+                              │ Deterministic Signal   │
+                              │ / Rule Engine          │
+                              │                        │
+                              │ Baseline vs Current    │
+                              │ Change Detection       │
+                              │ Attention Signals      │
+                              └────────────┬───────────┘
+                                           │
+                                           ▼
+                                  Decision-ready UI
+```
+
+### Architectural principle
+
+The application separates:
+
+```text
+Source ingestion
+      ↓
+Evidence storage
+      ↓
+Signal generation
+      ↓
+API layer
+      ↓
+UI
+```
+
+This makes the evidence model source-agnostic. A future adapter can normalize another environmental source into the same evidence structure without forcing a redesign of the downstream UI or rule engine.
+
+---
+
+# 9. Technology stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Frontend | React | Application UI |
+| Build | Vite | Development and production build |
+| Mapping | Mapbox GL JS | Interactive geospatial map |
+| Drawing | Mapbox GL Draw | Polygon creation/editing |
+| Visualization | Chart.js | Interactive site analytics |
+| Routing | React Router | SPA navigation |
+| HTTP | Axios | Frontend API client |
+| Backend | FastAPI | REST API |
+| Language | Python | Backend and rule engine |
+| Authentication | JWT | API authentication |
+| Database | PostgreSQL | Primary relational store |
+| Spatial DB | PostGIS | Polygon and spatial data |
+| ORM | SQLAlchemy + GeoAlchemy2 | Database access and geometry |
+| Geometry | Shapely | Geometry manipulation |
+| Testing | pytest | Backend/rule tests |
+| Quality | ESLint, Prettier | Frontend quality |
+| Git hooks | Husky, lint-staged | Pre-commit automation |
+| CI | GitHub Actions | Automated validation |
+| Frontend deployment | Vercel | Public web application |
+| Backend deployment | Render | API + managed PostgreSQL/PostGIS |
+
+---
+
+# 10. Database schema
+
+The primary relationships are:
+
+```text
+users
+  │
+  └── 1:N ──> projects
+                 │
+                 └── 1:N ──> sites
+                                │
+                                └── 1:N ──> evidence_snapshots
+```
+
+## users
+
+Stores application identities.
+
+```text
+id
+email
+hashed_password
+created_at
+```
+
+## projects
+
+Represents a logical environmental/nature project.
+
+```text
+id
+name
+description
+owner_id  → users.id
+created_at
+```
+
+## sites
+
+Represents a geographical monitoring site.
+
+```text
+id
+project_id       → projects.id
+name
+geom             → PostGIS POLYGON, SRID 4326
+centroid_lat
+centroid_lon
+area_hectares
+created_at
+updated_at
+```
+
+The polygon is stored as native PostGIS geometry rather than as unstructured JSON.
+
+## evidence_snapshots
+
+Stores normalized source evidence.
+
+```text
+id
+site_id             → sites.id
+source
+source_record_id
+evidence_type
+period_label
+observed_at
+fetched_at
+payload             → JSON
+is_real
+metadata_json       → JSON
+```
+
+The evidence table is intentionally generic so new source adapters can be introduced without changing the core site model.
+
+---
+
+# 11. API design
+
+The frontend communicates with the FastAPI backend through a centralized API client.
+
+Major resource groups:
+
+```text
+/auth
+/projects
+/sites
+/evidence
+```
+
+Representative request flow:
+
+```text
+POST /auth/login
+        ↓
+JWT returned
+        ↓
+JWT attached to protected requests
+        ↓
+GET /projects
+        ↓
+GET /sites/by-project/{project_id}
+        ↓
+GET /sites/{site_id}/detail
+```
+
+Authentication is enforced server-side on protected project, site, and evidence operations.
+
+---
+
+# 12. Repository structure
+
+```text
+darukaa/
+│
+├── backend/
+│   ├── app/
+│   │   ├── adapters/
+│   │   │   ├── gbif.py
+│   │   │   └── nasa_power.py
+│   │   ├── core/
+│   │   │   ├── config.py
+│   │   │   ├── db.py
+│   │   │   └── security.py
+│   │   ├── models/
+│   │   │   ├── models.py
+│   │   │   └── schemas.py
+│   │   ├── routers/
+│   │   │   ├── auth.py
+│   │   │   ├── projects.py
+│   │   │   ├── sites.py
+│   │   │   └── evidence.py
+│   │   ├── rules/
+│   │   │   └── engine.py
+│   │   ├── tests/
+│   │   │   └── test_rules.py
+│   │   ├── main.py
+│   │   └── seed.py
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── init.sql
+│
+├── frontend/
+│   ├── src/
+│   │   ├── api/
+│   │   │   └── client.js
+│   │   ├── components/
+│   │   ├── pages/
+│   │   │   ├── LoginPage.jsx
+│   │   │   ├── DashboardPage.jsx
+│   │   │   ├── ProjectMapPage.jsx
+│   │   │   └── SiteDetailPage.jsx
+│   │   ├── App.jsx
+│   │   └── main.jsx
+│   ├── package.json
+│   ├── vite.config.js
+│   └── vercel.json
+│
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+│
+├── .husky/
+├── docker-compose.yml
+├── render.yaml
+└── README.md
+```
+
+---
+
+# 13. Local development
+
+## Prerequisites
+
+Install:
+
+- Git
+- Node.js 20+
+- npm
+- Python 3.11+
+- PostgreSQL 16+
+- PostGIS
+- A Mapbox public access token
+
+Docker Compose can also be used if preferred.
+
+---
+
+## 13. Clone the repository
+
+```bash
+git clone https://github.com/akritithap07/darukaa-site-intelligence.git
+cd darukaa-site-intelligence
+```
+
+---
+
+## Backend setup
+
+```bash
+cd backend
+python -m venv .venv
+```
+
+### Windows
+
+```bash
+.venv\Scripts\activate
+```
+
+### macOS/Linux
+
+```bash
+source .venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Create a PostgreSQL database with the PostGIS extension enabled.
+
+Create `backend/.env`:
+
+```env
+DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/darukaa
+JWT_SECRET=replace-with-a-random-production-secret
+CORS_ORIGINS=http://localhost:5173
+```
+
+Run the seed script:
+
+```bash
+python -m app.seed
+```
+
+Start the API:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+The backend will be available at:
+
+```text
+http://localhost:8000
+```
+
+Interactive API documentation:
+
+```text
+http://localhost:8000/docs
+```
+
+---
+
+# 14. Frontend setup
+
+Open a second terminal:
+
+```bash
+cd frontend
+npm install
+```
+
+Create `frontend/.env`:
+
+```env
+VITE_API_BASE_URL=http://localhost:8000
+VITE_MAPBOX_TOKEN=YOUR_MAPBOX_PUBLIC_TOKEN
+```
+
+Start the application:
+
+```bash
+npm run dev
+```
+
+The frontend will normally be available at:
+
+```text
+http://localhost:5173
+```
+
+---
+
+# 15. Demo account
+
+The backend seed process creates the reviewer account automatically.
+
+```text
+Email:    demo@darukaa.earth
+Password: demo1234
+```
+
+The seed also creates demonstration projects and geographical sites so a reviewer can enter the application and immediately inspect the map and site workflow.
+
+> These credentials are intended for the demonstration environment only and must not be reused for production authentication.
+
+---
+
+# 16. Production build and validation
+
+From `frontend/`:
+
+```bash
+npm run lint
+npm run build
+```
+
+A successful Vite build produces the production assets under:
+
+```text
+frontend/dist/
+```
+
+Backend tests:
+
+```bash
+cd backend
+pytest -q
+```
+
+The deterministic rule engine is designed to be independently testable and covers detection, no-data handling, climate deviation, stale evidence, synthetic evidence handling, and combined evaluation.
+
+---
+
+# 17. Environment variables
+
+## Backend
+
+| Variable | Purpose |
 |---|---|
-| `pytest` (rule engine, 7 tests) | **PASS** — `7 passed in 0.02s` |
-| `npm run lint` | **PASS** — zero errors/warnings |
-| `npm run build` | **PASS** — `✓ built in 9.95s` (one non-blocking chunk-size warning, documented above) |
-| Real PostgreSQL 16 + PostGIS 3.4 install & extension | **PASS** — `postgis_version()` returned `3.4 USE_GEOS=1 USE_PROJ=1 USE_STATS=1` |
-| Seed script against real PostGIS | **PASS** — 3 projects/sites created, polygons verified via `ST_AsText` |
-| Live HTTP: register → login → JWT | **PASS** |
-| Live HTTP: create/list project | **PASS** |
-| Live HTTP: create site with polygon, retrieve, persisted correctly | **PASS** |
-| Live HTTP: unauthenticated request rejected | **PASS** — `401 Not authenticated` |
-| Live HTTP: `/sites/{id}/detail` (GBIF + NASA + rule engine) | **PASS with honest degradation** — outbound calls to `api.gbif.org`/`power.larc.nasa.gov` returned `403` due to this sandbox's network allowlist; the system correctly stored labeled `fetch_error` evidence (`is_real: false`) rather than fabricating data, and produced zero fake signals |
+| `DATABASE_URL` | PostgreSQL/PostGIS connection string |
+| `JWT_SECRET` | Secret used to sign JWTs |
+| `CORS_ORIGINS` | Comma-separated frontend origins |
+
+## Frontend
+
+| Variable | Purpose |
+|---|---|
+| `VITE_API_BASE_URL` | FastAPI backend URL |
+| `VITE_MAPBOX_TOKEN` | Public Mapbox access token |
+
+Never commit real `.env` files, passwords, JWT secrets, database credentials, or private API keys.
+
+---
+
+# 18. CI/CD pipeline
+
+The repository uses GitHub Actions to validate changes before they are considered deployable.
+
+The workflow is defined in:
+
+```text
+.github/workflows/ci.yml
+```
+
+## Frontend CI
+
+On pushes and pull requests to `main`, the frontend job:
+
+```text
+Checkout repository
+      ↓
+Set up Node.js
+      ↓
+Install dependencies
+      ↓
+Run ESLint
+      ↓
+Run Vite production build
+```
+
+Commands:
+
+```bash
+npm install
+npm run lint
+npm run build
+```
+
+## Backend CI
+
+The backend job:
+
+```text
+Checkout repository
+      ↓
+Set up Python
+      ↓
+Start PostgreSQL + PostGIS service
+      ↓
+Install Python dependencies
+      ↓
+Run pytest
+```
+
+This is important because the backend tests run against a real PostGIS-enabled PostgreSQL service rather than only a mock database.
+
+---
+
+# 19. Pre-commit quality controls
+
+The project also includes local developer quality checks.
+
+The frontend uses:
+
+- ESLint
+- Prettier
+- Husky
+- lint-staged
+
+The backend uses:
+
+- Black
+- Flake8
+- pre-commit hooks
+
+The intended developer workflow is:
+
+```text
+Edit
+  ↓
+git commit
+  ↓
+Pre-commit formatting/linting
+  ↓
+Commit
+  ↓
+Push to GitHub
+  ↓
+GitHub Actions
+  ↓
+Build + tests
+```
+
+This catches simple quality issues before they reach the deployment pipeline.
+
+---
+
+# 20. Deployment architecture
+
+## Frontend — Vercel
+
+Production frontend:
+
+**https://darukaa-site-intelligence.vercel.app**
+
+Vercel builds the React/Vite application from the `frontend` directory.
+
+The SPA rewrite configuration is defined in:
+
+```text
+frontend/vercel.json
+```
+
+## Backend — Render
+
+Production API:
+
+**https://darukaa-backend-ritx.onrender.com**
+
+The Render configuration is defined in:
+
+```text
+render.yaml
+```
+
+The backend uses a managed PostgreSQL database with PostGIS support.
+
+The deployment startup process initializes the database schema, seeds the demo environment, and launches the FastAPI application.
+
+---
+
+# 21. Security model
+
+The MVP includes:
+
+- bcrypt password hashing
+- JWT authentication
+- protected backend routes
+- project ownership checks
+- environment-based secret configuration
+- CORS configuration
+- frontend Mapbox token supplied through environment variables
+
+Intentionally out of scope for this MVP:
+
+- refresh-token rotation
+- rate limiting
+- organization-level RBAC
+- secrets rotation infrastructure
+- advanced audit logging
+- enterprise SSO
+
+These are appropriate next steps for a production multi-organization platform.
+
+---
+
+# 22. Geospatial design decisions
+
+Site polygons are stored in:
+
+```text
+PostGIS POLYGON
+SRID 4326
+```
+
+The frontend uses GeoJSON to communicate site boundaries with the API and Mapbox.
+
+A site also stores:
+
+```text
+centroid_lat
+centroid_lon
+area_hectares
+```
+
+The MVP area calculation is an approximate conversion suitable for demonstration-scale geometries. A production system would use a proper projected/equal-area calculation for authoritative area measurements.
+
+PostGIS provides the correct foundation for future operations such as:
+
+- spatial containment
+- site intersection/overlap
+- area calculations
+- proximity queries
+- spatial evidence retrieval
+
+---
+
+# 23. External-data reliability
+
+External APIs can fail, become unavailable, or return incomplete data.
+
+The application therefore distinguishes:
+
+```text
+successful evidence
+vs
+fetch failure
+vs
+synthetic/demo evidence
+```
+
+A failed external fetch is not silently displayed as valid environmental information.
+
+Where external data is unavailable, the UI should communicate the absence of observations rather than converting missing data into a numerical zero.
+
+This is especially important for biodiversity occurrence data, where:
+
+```text
+"No observations found"
+```
+
+is not equivalent to:
+
+```text
+"0 biodiversity"
+```
+
+---
+
+# 24. Product and engineering trade-offs
+
+## Why deterministic rules instead of an AI score?
+
+The MVP does not have a sufficiently grounded training dataset or methodology for a scientifically defensible environmental-health score.
+
+A deterministic rules layer is:
+
+- transparent
+- testable
+- reproducible
+- easier to audit
+- easier to explain to domain specialists
+
+## Why evidence snapshots?
+
+Environmental information is time-dependent.
+
+Retaining source-specific snapshots makes it possible to answer:
+
+> What did we know, when did we know it, and where did it come from?
+
+## Why adapters?
+
+The evidence model is intentionally designed so different sources can normalize into the same downstream contract.
+
+A future adapter could ingest:
+
+```text
+GBIF
+NASA POWER
+Satellite observations
+Bioacoustics
+Camera traps
+Field surveys
+Sensor data
+```
+
+without forcing the entire application to be rewritten.
+
+---
+
+# 25. Scalability roadmap
+
+The current application is deliberately scoped as an MVP. The architecture supports several natural production extensions.
+
+### Ingestion
+
+Move external-data adapters behind asynchronous jobs with retry/backoff.
+
+### Storage
+
+Partition or archive evidence snapshots as data volume grows.
+
+### Spatial workloads
+
+Tune spatial indexes and introduce additional spatial aggregation for large portfolios.
+
+### Organization model
+
+Introduce organizations, teams, roles, and tenant isolation.
+
+### Additional evidence
+
+Add satellite, camera-trap, bioacoustic, sensor, and field-app adapters.
+
+### Reporting
+
+Introduce reporting/export workflows after domain requirements are defined with appropriate scientific and disclosure expertise.
+
+---
+
+# 26. What is intentionally not in the MVP
+
+The following were deliberately excluded to keep the product focused:
+
+- AI chatbot
+- arbitrary biodiversity/environmental health score
+- blockchain-based credit ledger
+- full TNFD/BRSR report generator
+- full satellite-processing pipeline
+- notification infrastructure
+- complex enterprise RBAC
+- unnecessary microservices
+
+The goal was to make the **core site-intelligence loop** work end-to-end rather than create a larger but less reliable feature set.
+
+---
+
+# 27. Reviewer demo path
+
+Use the seeded account to walk through the application:
+
+```text
+1. Login
+2. Open the Dashboard
+3. Select a project
+4. Open the Project Map
+5. Inspect existing site polygons
+6. Draw a new site polygon
+7. Save the site
+8. Open Site Detail
+9. Review evidence
+10. Inspect provenance and timestamps
+11. Compare baseline and current
+12. Review "What Changed"
+13. Review "Needs Attention"
+```
+
+The intended narrative is:
+
+> **Here is the site → here is the evidence → here is what changed → here is why the system surfaced it.**
+
+---
+
+# 28. Known MVP limitations
+
+- External-source ingestion is intentionally lightweight and not yet backed by a production task queue.
+- External API availability depends on the upstream services.
+- Area calculation is approximate for prototype-scale geometry.
+- Baseline/current periods are application-defined rather than tied to a registry-specific ecological baseline.
+- Authentication is deliberately minimal and intended for the MVP rather than enterprise identity management.
+- Reporting/export workflows are not implemented in this version.
+
+---
+
+# 29. Repository and live application
+
+### GitHub
+
+https://github.com/akritithap07/darukaa-site-intelligence
+
+### Live application
+
+https://darukaa-site-intelligence.vercel.app
+
+### Backend API
+
+https://darukaa-backend-ritx.onrender.com
+
+### API documentation
+
+https://darukaa-backend-ritx.onrender.com/docs
+
+---
+
+# 30. Project status
+
+**MVP implementation**
+
+The current implementation focuses on the complete journey from authenticated project management through geospatial site creation and evidence-backed site intelligence.
+
+The system is intentionally structured so that additional environmental data sources and more advanced operational workflows can be introduced without changing the core site/evidence model.
+
+---
+
+## Built with
+
+**React · Vite · Mapbox GL JS · Mapbox Draw · Chart.js · FastAPI · PostgreSQL · PostGIS · SQLAlchemy · GeoAlchemy2 · Shapely · JWT · GitHub Actions · Vercel · Render**
