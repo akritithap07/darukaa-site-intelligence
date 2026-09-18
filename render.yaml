@@ -20,6 +20,8 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: CORS_ORIGINS
-        value: "*"
+        value: https://darukaa-site-intelligence.vercel.app
       - key: PYTHON_VERSION
         value: "3.13.15"
+
+        
