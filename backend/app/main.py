@@ -11,9 +11,41 @@ app = FastAPI(
     title="Darukaa Earth — Site Intelligence MVP",
     description="SITE → EVIDENCE → SIGNAL → INSIGHT → ACTION",
     version="0.1.0",
+    redirect_slashes=False,
 )
 
-# Explicit allowed origins list to prevent CORS credentials wildcard failures
+# Custom CORS Middleware to guarantee CORS headers are attached on ALL responses (including 500 errors & OPTIONS preflights)
+@app.middleware("http")
+async def cors_fallback_middleware(request: Request, call_next):
+    origin = request.headers.get("origin", "")
+    
+    # Handle preflight OPTIONS request explicitly
+    if request.method == "OPTIONS":
+        response = JSONResponse(content={"status": "ok"})
+        response.headers["Access-Control-Allow-Origin"] = origin if origin else "*"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        return response
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": f"Internal Server Error: {str(exc)}"},
+        )
+
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+
+    return response
+
+
+# Standard CORSMiddleware
 origins = [
     "https://darukaa-site-intelligence.vercel.app",
     "http://localhost:5173",
@@ -22,7 +54,6 @@ origins = [
     "http://127.0.0.1:3000",
 ]
 
-# Add custom origins from settings if configured
 for o in settings.cors_origin_list():
     if o and o != "*" and o not in origins:
         origins.append(o)
