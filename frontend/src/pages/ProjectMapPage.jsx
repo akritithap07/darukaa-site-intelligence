@@ -5,7 +5,8 @@ import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import { getProject, createSite } from '../api/client';
-import { ArrowLeft, Plus, MapPin, ExternalLink, ShieldAlert } from 'lucide-react';
+import AppNavbar from '../components/AppNavbar';
+import { Plus, MapPin, ExternalLink, ShieldAlert, Layers } from 'lucide-react';
 
 export default function ProjectMapPage() {
   const { projectId } = useParams();
@@ -20,7 +21,6 @@ export default function ProjectMapPage() {
   const [error, setError] = useState('');
   const [isDrawing, setIsDrawing] = useState(false);
 
-  // New site form state
   const [siteName, setSiteName] = useState('');
   const [siteDrawnGeoJSON, setSiteDrawnGeoJSON] = useState(null);
   const [savingSite, setSavingSite] = useState(false);
@@ -39,7 +39,7 @@ export default function ProjectMapPage() {
         const res = await getProject(projectId);
         setProject(res.data);
       } catch (err) {
-        setError(err.response?.data?.detail || 'Failed to load project');
+        setError(err.response?.data?.detail || 'Failed to load project details.');
       } finally {
         setLoading(false);
       }
@@ -53,7 +53,7 @@ export default function ProjectMapPage() {
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
       style: 'mapbox://styles/mapbox/satellite-streets-v12',
-      center: [78.9629, 20.5937], // Default India view
+      center: [78.9629, 20.5937],
       zoom: 4,
     });
 
@@ -61,21 +61,18 @@ export default function ProjectMapPage() {
 
     const draw = new MapboxDraw({
       displayControlsDefault: false,
-      controls: {
-        polygon: true,
-        trash: true,
-      },
+      controls: { polygon: true, trash: true },
       defaultMode: 'simple_select',
     });
 
     drawRef.current = draw;
     map.addControl(draw, 'top-left');
+    map.addControl(new mapboxgl.NavigationControl(), 'bottom-right');
 
     const updateDrawnShape = () => {
       const data = draw.getAll();
       if (data.features.length > 0) {
-        const lastFeature = data.features[data.features.length - 1];
-        setSiteDrawnGeoJSON(lastFeature.geometry);
+        setSiteDrawnGeoJSON(data.features[data.features.length - 1].geometry);
       } else {
         setSiteDrawnGeoJSON(null);
       }
@@ -86,6 +83,8 @@ export default function ProjectMapPage() {
     map.on('draw.delete', updateDrawnShape);
 
     map.on('load', () => {
+      map.resize();
+
       if (project.sites && project.sites.length > 0) {
         const bounds = new mapboxgl.LngLatBounds();
 
@@ -109,58 +108,37 @@ export default function ProjectMapPage() {
             id: fillLayerId,
             type: 'fill',
             source: sourceId,
-            paint: {
-              'fill-color': '#10B981',
-              'fill-opacity': 0.3,
-            },
+            paint: { 'fill-color': '#10B981', 'fill-opacity': 0.35 },
           });
 
           map.addLayer({
             id: lineLayerId,
             type: 'line',
             source: sourceId,
-            paint: {
-              'line-color': '#059669',
-              'line-width': 2,
-            },
+            paint: { 'line-color': '#059669', 'line-width': 2 },
           });
 
-          // Expand bounds
           if (site.boundary.coordinates && site.boundary.coordinates[0]) {
-            site.boundary.coordinates[0].forEach((coord) => {
-              bounds.extend(coord);
-            });
+            site.boundary.coordinates[0].forEach((coord) => bounds.extend(coord));
           }
 
-          // Click site polygon -> Navigate
-          map.on('click', fillLayerId, () => {
-            navigate(`/site/${site.id}`);
-          });
-
-          map.on('mouseenter', fillLayerId, () => {
-            map.getCanvas().style.cursor = 'pointer';
-          });
-          map.on('mouseleave', fillLayerId, () => {
-            map.getCanvas().style.cursor = '';
-          });
+          map.on('click', fillLayerId, () => navigate(`/site/${site.id}`));
+          map.on('mouseenter', fillLayerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+          map.on('mouseleave', fillLayerId, () => { map.getCanvas().style.cursor = ''; });
         });
 
         if (!bounds.isEmpty()) {
-          map.fitBounds(bounds, { padding: 80 });
+          map.fitBounds(bounds, { padding: 80, maxZoom: 14 });
         }
       }
     });
 
-    return () => {
-      map.remove();
-    };
+    return () => map.remove();
   }, [loading, project, navigate]);
 
   const handleStartDraw = () => {
     setIsDrawing(true);
-    if (drawRef.current) {
-      drawRef.current.changeMode('draw_polygon');
-    }
+    if (drawRef.current) drawRef.current.changeMode('draw_polygon');
   };
 
   const handleCancelDraw = () => {
@@ -175,14 +153,8 @@ export default function ProjectMapPage() {
 
   const handleSaveSite = async (e) => {
     e.preventDefault();
-    if (!siteName.trim()) {
-      alert('Please provide a site name');
-      return;
-    }
-    if (!siteDrawnGeoJSON) {
-      alert('Please draw a polygon on the map first');
-      return;
-    }
+    if (!siteName.trim()) return alert('Please enter a site name');
+    if (!siteDrawnGeoJSON) return alert('Please draw a polygon boundary on the map first');
 
     setSavingSite(true);
     try {
@@ -193,11 +165,10 @@ export default function ProjectMapPage() {
       });
 
       handleCancelDraw();
-      // Reload project
       const res = await getProject(projectId);
       setProject(res.data);
     } catch (err) {
-      alert(err.response?.data?.detail || 'Failed to save site');
+      alert(err.response?.data?.detail || 'Failed to save site boundary');
     } finally {
       setSavingSite(false);
     }
@@ -205,72 +176,57 @@ export default function ProjectMapPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-slate-300">
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-slate-400 text-sm font-medium">
         Loading spatial environment...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col h-screen">
-      {/* Header */}
-      <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between z-10">
-        <div className="flex items-center space-x-4">
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="p-2 text-slate-400 hover:text-white bg-slate-700/50 rounded-lg transition"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <div>
-            <h1 className="font-bold text-lg text-white">{project?.name}</h1>
-            <p className="text-xs text-slate-400">{project?.description || 'Site Spatial Intelligence Workspace'}</p>
-          </div>
-        </div>
+    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col h-screen overflow-hidden">
+      <AppNavbar project={project} />
 
-        <div className="flex items-center space-x-3">
-          {!isDrawing ? (
-            <button
-              onClick={handleStartDraw}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-medium text-sm flex items-center space-x-2 transition"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add New Site</span>
-            </button>
-          ) : (
-            <button
-              onClick={handleCancelDraw}
-              className="bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-2 rounded-lg font-medium text-sm transition"
-            >
-              Cancel Drawing
-            </button>
-          )}
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Map Container */}
-        <div className="flex-1 h-full relative">
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+        {/* Map Viewport */}
+        <div className="flex-1 h-[60vh] md:h-full relative bg-slate-950">
           {!mapboxToken && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-amber-500/10 border border-amber-500/30 text-amber-300 px-4 py-2 rounded-lg text-xs flex items-center space-x-2 backdrop-blur-md">
-              <ShieldAlert className="w-4 h-4 text-amber-400" />
-              <span>VITE_MAPBOX_TOKEN is missing. Map features require a valid token.</span>
+              <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>VITE_MAPBOX_TOKEN is missing. Map requires a valid public access token.</span>
             </div>
           )}
-          <div ref={mapContainerRef} className="w-full h-full" />
+          <div ref={mapContainerRef} className="w-full h-full min-h-[450px]" />
         </div>
 
-        {/* Sidebar */}
-        <div className="w-80 bg-slate-800 border-l border-slate-700 flex flex-col z-10">
-          {isDrawing ? (
-            <div className="p-5 space-y-4">
-              <h3 className="font-bold text-slate-200 text-sm uppercase tracking-wider">Draw Site Polygon</h3>
-              <p className="text-xs text-slate-400">
-                Use the polygon tool on the map to define boundary coordinates.
-              </p>
+        {/* Control Panel Sidebar */}
+        <div className="w-full md:w-80 bg-slate-800 border-t md:border-t-0 md:border-l border-slate-700/80 flex flex-col z-10">
+          <div className="p-4 border-b border-slate-700/80 flex items-center justify-between">
+            <div>
+              <h2 className="font-bold text-sm text-slate-100">{project?.name}</h2>
+              <p className="text-xs text-slate-400">{project?.sites?.length || 0} Site Boundaries</p>
+            </div>
+            {!isDrawing ? (
+              <button
+                onClick={handleStartDraw}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-md font-medium text-xs flex items-center space-x-1.5 transition"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Draw Site</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleCancelDraw}
+                className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-md font-medium text-xs transition"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
 
-              <form onSubmit={handleSaveSite} className="space-y-4 pt-2">
+          {isDrawing ? (
+            <div className="p-4 space-y-4">
+              <h3 className="font-semibold text-xs uppercase tracking-wider text-slate-300">Define Boundary</h3>
+              <form onSubmit={handleSaveSite} className="space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1">Site Name</label>
                   <input
@@ -278,57 +234,51 @@ export default function ProjectMapPage() {
                     required
                     value={siteName}
                     onChange={(e) => setSiteName(e.target.value)}
-                    placeholder="e.g. Mangrove Core Zone A"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                    placeholder="e.g. Coastal Mangrove Plot A"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
                   />
                 </div>
 
-                <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-700/50">
-                  <span className="text-xs font-medium text-slate-400">Status: </span>
-                  <span className={`text-xs font-semibold ${siteDrawnGeoJSON ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {siteDrawnGeoJSON ? 'Polygon Drawn ✓' : 'Waiting for map input...'}
-                  </span>
+                <div className="bg-slate-900/60 p-3 rounded-md border border-slate-700/50">
+                  <div className="text-[11px] text-slate-400">Boundary Status</div>
+                  <div className={`text-xs font-semibold mt-0.5 ${siteDrawnGeoJSON ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {siteDrawnGeoJSON ? 'Polygon Shape Defined ✓' : 'Click Map to Add Vertices...'}
+                  </div>
                 </div>
 
                 <button
                   type="submit"
                   disabled={savingSite || !siteDrawnGeoJSON}
-                  className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white py-2 rounded-lg font-medium text-sm transition"
+                  className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white py-2 rounded-md font-medium text-xs transition"
                 >
-                  {savingSite ? 'Saving to PostGIS...' : 'Save Site Boundary'}
+                  {savingSite ? 'Persisting to PostGIS...' : 'Save Site Boundary'}
                 </button>
               </form>
             </div>
           ) : (
-            <div className="p-5 flex-1 flex flex-col overflow-y-auto">
-              <h3 className="font-bold text-slate-200 text-sm uppercase tracking-wider mb-4">
-                Project Sites ({project?.sites?.length || 0})
-              </h3>
-
-              {error && <div className="text-red-400 text-xs mb-3">{error}</div>}
-
+            <div className="p-4 flex-1 overflow-y-auto">
+              {error && <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-md mb-3">{error}</div>}
               {project?.sites?.length === 0 ? (
-                <div className="text-center py-12 text-slate-500 text-xs">
-                  No site boundaries registered yet. Click "Add New Site" to draw one.
+                <div className="text-center py-10 text-slate-500 text-xs">
+                  <Layers className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                  No sites registered. Click "Draw Site" to map a polygon.
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {project?.sites?.map((site) => (
                     <div
                       key={site.id}
                       onClick={() => navigate(`/site/${site.id}`)}
-                      className="p-3 bg-slate-900/60 hover:bg-slate-700/50 border border-slate-700/60 rounded-lg cursor-pointer transition flex items-center justify-between group"
+                      className="p-3 bg-slate-900/50 hover:bg-slate-700/40 border border-slate-700/50 rounded-md cursor-pointer transition flex items-center justify-between group"
                     >
-                      <div className="flex items-center space-x-3">
-                        <MapPin className="w-4 h-4 text-emerald-400" />
+                      <div className="flex items-center space-x-2.5">
+                        <MapPin className="w-4 h-4 text-emerald-400 shrink-0" />
                         <div>
-                          <div className="text-sm font-medium text-slate-200 group-hover:text-emerald-400 transition">
-                            {site.name}
-                          </div>
-                          <div className="text-[10px] text-slate-500">ID: {site.id}</div>
+                          <div className="text-xs font-medium text-slate-200 group-hover:text-emerald-400 transition">{site.name}</div>
+                          <div className="text-[10px] text-slate-500">PostGIS ID: #{site.id}</div>
                         </div>
                       </div>
-                      <ExternalLink className="w-4 h-4 text-slate-500 group-hover:text-slate-300 transition" />
+                      <ExternalLink className="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition" />
                     </div>
                   ))}
                 </div>
