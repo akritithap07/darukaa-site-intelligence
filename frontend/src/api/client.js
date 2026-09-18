@@ -1,6 +1,10 @@
 import axios from 'axios';
 
-const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const defaultBackend = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+  ? 'https://darukaa-backend-ritx.onrender.com'
+  : 'http://localhost:8000';
+
+export const baseURL = import.meta.env.VITE_API_BASE_URL || defaultBackend;
 
 export const api = axios.create({
   baseURL,
@@ -18,9 +22,14 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Helper to reliably convert FastAPI 422 detail objects or standard error strings into clean UI text
+// Helper to reliably convert FastAPI 422 detail objects, Network Errors, or standard error strings into clean UI text
 export const extractErrorMessage = (err, fallback = 'An error occurred. Please try again.') => {
   if (!err) return fallback;
+
+  if (err?.code === 'ERR_NETWORK' || err?.message === 'Network Error') {
+    return 'Unable to reach backend server. Please check your internet connection or backend status.';
+  }
+
   const detail = err?.response?.data?.detail;
 
   if (typeof detail === 'string') {
@@ -96,19 +105,17 @@ export const sitesApi = {
     return res.data;
   },
   create: async (siteData) => {
-    // Standardize polygon structure for backend Shapely/PostGIS:
-    // Backend expects polygon: [[[lon, lat], [lon, lat], ...]]
     let coords = siteData.polygon || siteData.boundary?.coordinates;
     if (siteData.boundary && siteData.boundary.type === 'Polygon') {
       coords = siteData.boundary.coordinates;
     }
-    
+
     const payload = {
       project_id: parseInt(siteData.project_id, 10),
       name: siteData.name,
       polygon: coords,
     };
-    
+
     const res = await api.post('/sites', payload);
     return res.data;
   },
@@ -118,7 +125,7 @@ export const sitesApi = {
   },
 };
 
-// Standalone Named Functions (Direct Component/Page Imports)
+// Standalone Named Functions
 export const login = (credentials) => authApi.login(credentials);
 export const register = (data) => authApi.register(data);
 export const logout = () => {
