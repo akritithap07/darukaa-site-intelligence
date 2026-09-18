@@ -12,13 +12,30 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# Robust CORS Configuration supporting Vercel production, preview deployments, and local dev
+cors_origins = set(settings.cors_origin_list())
+cors_origins.update([
+    "https://darukaa-site-intelligence.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+])
+
+# Remove raw '*' string from allow_origins list if allow_credentials=True is enabled to prevent browser CORS rejections
+allow_all = "*" in cors_origins
+if allow_all:
+    cors_origins.remove("*")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://darukaa-site-intelligence.vercel.app"],
+    allow_origins=list(cors_origins) if not allow_all else ["*"],
+    allow_origin_regex=r"https://.*\.vercel\.app" if allow_all else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 @app.on_event("startup")
